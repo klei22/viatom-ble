@@ -68,3 +68,5 @@ python py3_health_to_influxdb.py -v -c
 ## Todos
 
 Look to organize code, and test/validate the systemctl methods with the new influxdb integration.
+
+Add influxdb and other parameters as opts to be optionally set with flags.
