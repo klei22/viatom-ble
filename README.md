@@ -36,7 +36,7 @@ Scan while wearing the device to determine it's BLE address.
 *Note: Ensure the device is not connected to any other monitor (ie the mobile app) before scanning.*
 
 ```
-sudo python viatom-ble.py -s
+sudo python3 viatom-ble.py -s
 ```
 
 Look for a device with `Complete Local Name` that is associated with the ring monitor device and note its `Device` address (six colon-delimited octets, eg aa:bb:cc:11:22:33)
@@ -56,13 +56,13 @@ Optionally could setup visualizer like Grafana for seeing these in real time.
 Test BLE connectivity while wearing the device.
 
 ```
-python viatom-ble.py -v -c
+python3 viatom-ble.py -v -c
 ```
 
 Start connection with Grafana/InfluxDB with the following:
 
 ```
-python py3_health_to_influxdb.py -v -c
+python3 py3_health_to_influxdb.py -v -c
 ```
 
 ## Todos
