@@ -36,13 +36,13 @@ from(bucket: "{INFLUXDB_BUCKET}")
   |> last()
 """
 
-# Icons for the stats
-icons = {
-    "bpm": "❤️",
-    "spo2": "🔵",
-    "battery": "🔋",
-    "movement": "⏭️",
-    "pi": "📈"
+# ASCII art for the stats
+ascii_icons = {
+    "bpm": "♥",         # Heart
+    "spo2": "●",        # Circle
+    "movement": ">>",   # Motion
+    "pi": "%",           # Pi symbol
+    "battery": "[+ -]",   # Battery
 }
 
 try:
@@ -59,13 +59,13 @@ try:
             stats[field] = value
 
     output = []
-    for key, icon in icons.items():
+    for key, icon in ascii_icons.items():
         if key in stats:
-            output.append(f"{icon} {stats[key]}")
+            output.append(f"{icon}_{stats[key]}")
         else:
             output.append(f"{icon} N/A")
 
-    print(" | ".join(output))
+    print("  ".join(output))
 
 except Exception as e:
     print(f"Error querying InfluxDB: {e}")

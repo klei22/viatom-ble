@@ -4,7 +4,6 @@ import sys
 import getopt
 import logging
 import bluepy.btle as btle
-import paho.mqtt.client as mqtt
 from datetime import datetime
 from datetime import timedelta
 
@@ -19,20 +18,8 @@ def sleep(period):
     ms = (dt.days * 24 * 60 * 60 + dt.seconds) * 1000 + dt.microseconds / 1000.0
 
 
-def on_mqtt_connect(client, userdata, flags, rc):
-    client.disconnect_flag = False
-    if rc == 0:
-        client.connected_flag = True
-        logger.info("MQTT: Connected to broker " + mqtt_address)
-    else:
-        client.connected_flag = False
-        logger.warning("MQTT: Connection failed (code=" + rc + ")")
 
 
-def on_mqtt_disconnect(client, userdata, rc):
-    client.connected_flag = False
-    client.disconnect_flag = True
-    logger.warning("MQTT: Unexpected disconnection (code=" + rc + ")")
 
 
 class ReadDelegate(btle.DefaultDelegate):
@@ -54,10 +41,6 @@ class ReadDelegate(btle.DefaultDelegate):
                             + str(ord(data[14]))
                             + "%"
                         )
-                    if client.connected_flag:
-                        client.publish(
-                            mqtt_topic, '{"Battery":' + str(ord(data[14])) + "}"
-                        )
                 elif ord(data[7]) == 0 and ord(data[8]) == 0:
                     ble_fail_count += 1
                     if verbose:
@@ -65,10 +48,6 @@ class ReadDelegate(btle.DefaultDelegate):
                             "Device is calibrating...\tBattery: "
                             + str(ord(data[14]))
                             + "%"
-                        )
-                    if client.connected_flag:
-                        client.publish(
-                            mqtt_topic, '{"Battery":' + str(ord(data[14])) + "}"
                         )
                 else:
                     ble_fail_count = 0
@@ -138,7 +117,7 @@ if __name__ == "__main__":
 
     # ble config params
     # ble address of device
-    ble_address = "f3:ce:82:50:0c:a5"
+    ble_address = "DE:C7:8C:52:03:93"
     ble_type = btle.ADDR_TYPE_RANDOM
     # seconds to wait between reads
     ble_read_period = 2
@@ -149,40 +128,13 @@ if __name__ == "__main__":
     # seconds to wait after inactivity timeout before reconnecting resumes
     ble_inactivity_delay = 130
 
-    # mqtt config params
-    mqtt_address = ""
-    mqtt_username = ""
-    mqtt_password = ""
-    mqtt_topic = "viatom-ble"
 
     # other params
     ble_next_reconnect_delay = ble_reconnect_delay
     ble_fail_count = 0
-    logfile = "/var/log/viatom-ble.log"
+    logfile = "./viatom-ble.log"
     console = False
     verbose = False
-
-    try:
-        opts, args = getopt.getopt(sys.argv[1:], "hvcsa:m:", ["address=", "mqtt="])
-    except getopt.GetoptError:
-        print("viatom-ble.py -v -a <ble_address>")
-        sys.exit(2)
-    for opt, arg in opts:
-        if opt == "-h":
-            print("viatom-ble.py -v -a <ble_address>")
-            sys.exit()
-        elif opt == "-v":
-            verbose = True
-        elif opt == "-c":
-            console = True
-        elif opt == "-s":
-            if os.geteuid() != 0:
-                print("Must be root to perform scan")
-                sys.exit(3)
-            ble_scan()
-            sys.exit()
-        elif opt in ("-a", "--address"):
-            ble_address = arg
 
     # initialize logger
     if not console or logfile == "":
@@ -206,18 +158,6 @@ if __name__ == "__main__":
 
     # Connect to MQTT broker
     # (will automatically reconnect in background on connection drop)
-    mqtt.Client.connected_flag = False
-    mqtt.Client.disconnect_flag = False
-    client = mqtt.Client("viatom-ble")
-    client.on_connect = on_mqtt_connect
-    client.on_disconnect = on_mqtt_disconnect
-    client.loop_start()
-    logger.info("MQTT: Connecting to broker " + mqtt_address + "...")
-    client.username_pw_set(username=mqtt_username, password=mqtt_password)
-    try:
-        client.connect(mqtt_address)
-    except:
-        logger.error("MQTT: Failed to connect to broker " + mqtt_address)
 
     # Connect to BLE device and write/read infinitely
     peripheral = btle.Peripheral()

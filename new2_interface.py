@@ -6,6 +6,7 @@ from datetime import datetime
 import bluepy.btle as btle
 from influxdb_client import InfluxDBClient, Point
 from influxdb_client.client.write_api import SYNCHRONOUS
+from caffeinate import caffeinate
 
 # Configuration
 INFLUXDB_URL = os.environ.get("INFLUXDB_URL", "http://localhost:8086")
@@ -24,7 +25,7 @@ MAX_RECONNECT_DELAY = 60
 logging.basicConfig(
     format="%(asctime)s.%(msecs)03d [%(process)d] %(levelname)s %(message)s",
     datefmt="%Y-%m-%d %H:%M:%S",
-    level=logging.INFO,
+    level=logging.NOTSET,
 )
 logger = logging.getLogger(__name__)
 

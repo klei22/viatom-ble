@@ -1,251 +1,191 @@
-import time
 import os
 import sys
-import getopt
+import time
 import logging
 import bluepy.btle as btle
 from datetime import datetime
-from influxdb import InfluxDBClient
+from influxdb_client import InfluxDBClient, Point
+from influxdb_client.client.write_api import SYNCHRONOUS
 
-BLE_ADDRESS = "AA:BB:CC:DD:EE:FF"  # replace with your device address
+# Configuration
+INFLUXDB_URL = os.environ.get("INFLUXDB_URL", "http://localhost:8086")
+INFLUXDB_TOKEN = os.environ.get("INFLUXDB_TOKEN")
+INFLUXDB_ORG = os.environ.get("INFLUXDB_ORG", "chromebook")
+INFLUXDB_BUCKET = os.environ.get("INFLUXDB_BUCKET", "health_data")
+BLE_ADDRESS = os.environ.get("BLE_ADDRESS", "AA:BB:CC:DD:EE:FF")
+BLE_TYPE = btle.ADDR_TYPE_RANDOM
+BLE_READ_PERIOD = 2
+RETRY_DELAY = 10
+BLE_RECONNECT_DELAY = 5
+INITIAL_RECONNECT_DELAY = 1
+MAX_RECONNECT_DELAY = 60
 
+# Logging configuration
+logging.basicConfig(
+    format="%(asctime)s.%(msecs)03d [%(process)d] %(levelname)s %(message)s",
+    datefmt="%Y-%m-%d %H:%M:%S",
+    level=logging.INFO,
+)
+logger = logging.getLogger(__name__)
 
-def send_data(bpm, spo2, pi, movement, battery, user="user"):
-
-    host = "localhost"
-    port = 8086
-    user = "admin"
-    password = "password"
-    dbname = "demodb"
-    json_body = [
-        {
-            "measurement": "Health",
-            "tags": {
-                "host": user,
-            },
-            "fields": {
-                "bpm": bpm,
-                "spo2": spo2,
-                "pi": pi,
-                "movement": movement,
-                "battery": battery,
-            },
-        }
-    ]
-
-    client = InfluxDBClient(host, port, user, password, dbname)
-    client.write_points(json_body)
-
-
-def sleep(period):
-    msperiod = period * 1000
-    dt = datetime.now() - start_time
-    ms = (dt.days * 24 * 60 * 60 + dt.seconds) * 1000 + dt.microseconds / 1000.0
-    sleep = msperiod - (ms % msperiod)
-    time.sleep(sleep / 1000)
-    dt = datetime.now() - start_time
-    ms = (dt.days * 24 * 60 * 60 + dt.seconds) * 1000 + dt.microseconds / 1000.0
-
-
-class ReadDelegate(btle.DefaultDelegate):
+class HealthMonitor:
     def __init__(self):
-        btle.DefaultDelegate.__init__(self)
+        self.influx_client = None
+        self.write_api = None
+        self.peripheral = None
+        self.start_time = datetime.now()
+        self.reconnect_delay = INITIAL_RECONNECT_DELAY
 
-    def handleNotification(self, handle, data):
-        global ble_fail_count
-        global ble_next_reconnect_delay
-        print("spo2: ")
-        spo2 = data[7]
-        print("bpm: ", data[8])
-        bpm = data[8]
-        print("PI: ", data[17])
-        pi = data[17]
-        print("movement: ", data[16])
-        movement = data[16]
-        print("battery: ", data[14])
-        battery = data[14]
+    def connect_influxdb(self):
+        logger.info("Status: Connecting to InfluxDB...")
+        try:
+            self.influx_client = InfluxDBClient(url=INFLUXDB_URL, token=INFLUXDB_TOKEN, org=INFLUXDB_ORG)
+            self.write_api = self.influx_client.write_api(write_options=SYNCHRONOUS)
+            logger.info("Status: Successfully connected to InfluxDB")
+        except Exception as e:
+            logger.error(f"Status: Failed to connect to InfluxDB: {e}")
+            raise
 
-        send_data(bpm, spo2, pi, movement, battery)
+    def send_data(self, data_dict, user="user"):
+        if not self.write_api:
+            logger.error("Status: InfluxDB client is not initialized")
+            return
 
+        point = Point("Health").tag("host", user)
+        for key, value in data_dict.items():
+            point = point.field(key, value)
 
-class ScanDelegate(btle.DefaultDelegate):
-    def __init__(self):
-        btle.DefaultDelegate.__init__(self)
+        try:
+            self.write_api.write(bucket=INFLUXDB_BUCKET, record=point)
+            logger.info(f"Status: Successfully wrote data to InfluxDB: {data_dict}")
+        except Exception as e:
+            logger.error(f"Status: Failed to write data to InfluxDB: {e}")
+            time.sleep(RETRY_DELAY)
+            self.reconnect_influxdb()
 
-    def handleDiscovery(self, dev, isNewDev, isNewData):
-        if isNewDev:
-            print("Discovered device", dev.addr)
-        elif isNewData:
-            print("Received new data from", dev.addr)
+    def reconnect_influxdb(self):
+        logger.info("Status: Attempting to reconnect to InfluxDB...")
+        try:
+            if self.influx_client:
+                self.influx_client.close()
+            self.connect_influxdb()
+        except Exception as e:
+            logger.error(f"Status: Failed to reconnect to InfluxDB: {e}")
+            time.sleep(RETRY_DELAY)
 
+    def connect_ble(self):
+        logger.info(f"Status: Connecting to BLE device {BLE_ADDRESS}...")
+        try:
+            self.peripheral = btle.Peripheral(BLE_ADDRESS, BLE_TYPE)
+            logger.info(f"Status: Connected to BLE device {BLE_ADDRESS}")
+            self.peripheral.setDelegate(ReadDelegate(self))
+            self.setup_ble_service()
+            self.reconnect_delay = INITIAL_RECONNECT_DELAY
+        except Exception as e:
+            logger.error(f"Status: Failed to connect to BLE device: {e}")
+            self.reconnect_delay = min(self.reconnect_delay * 2, MAX_RECONNECT_DELAY)
+            logger.info(f"Status: Retrying in {self.reconnect_delay} seconds...")
+            time.sleep(self.reconnect_delay)
+            self.connect_ble()
 
-def ble_scan():
-    scanner = btle.Scanner().withDelegate(ScanDelegate())
-    devices = scanner.scan(10.0)
+    def setup_ble_service(self):
+        logger.info("Status: Setting up BLE service...")
+        ble_uuid = "14839ac4-7d7e-415c-9a42-167340cf2339"
+        ble_write_uuid_prefix = "8b00ace7"
+        ble_notify_uuid_prefix = "00002902"
+        write_bytes = b"\xaa\x17\xe8\x00\x00\x00\x00\x1b"
+        subscribe_bytes = b"\x01\x00"
 
-    for dev in devices:
-        print("Device %s (%s), RSSI=%d dB" % (dev.addr, dev.addrType, dev.rssi))
-        for (adtype, desc, value) in dev.getScanData():
-            print("  %s = %s" % (desc, value))
+        service = self.peripheral.getServiceByUUID(ble_uuid)
+        if service is None:
+            raise ValueError("BLE service not found")
 
+        self.write_handle = None
+        self.subscribe_handle = None
 
-if __name__ == "__main__":
+        for desc in service.getDescriptors():
+            str_uuid = str(desc.uuid).lower()
+            if str_uuid.startswith(ble_write_uuid_prefix):
+                self.write_handle = desc.handle
+            elif str_uuid.startswith(ble_notify_uuid_prefix):
+                self.subscribe_handle = desc.handle
 
-    # ble config params
-    # ble address of device
-    ble_address = BLE_ADDRESS
-    ble_type = btle.ADDR_TYPE_RANDOM
-    # seconds to wait between reads
-    ble_read_period = 2
-    # seconds to wait between btle reconnection attempts
-    ble_reconnect_delay = 1
-    # seconds of btle inactivity (not worn/calibrating) before force-disconnect
-    ble_inactivity_timeout = 300
-    # seconds to wait after inactivity timeout before reconnecting resumes
-    ble_inactivity_delay = 130
+        if self.write_handle is None or self.subscribe_handle is None:
+            raise ValueError("Required BLE handles not found")
 
-    # other params
-    ble_next_reconnect_delay = ble_reconnect_delay
-    ble_fail_count = 0
-    logfile = "viatom-ble.log"
-    console = False
-    verbose = False
+        self.peripheral.writeCharacteristic(self.subscribe_handle, subscribe_bytes, withResponse=True)
+        self.peripheral.writeCharacteristic(self.write_handle, write_bytes, withResponse=True)
+        logger.info("Status: BLE service setup completed")
 
-    try:
-        opts, args = getopt.getopt(sys.argv[1:], "hvcsa:m:", ["address=", "mqtt="])
-    except getopt.GetoptError:
-        print("viatom-ble.py -v -a <ble_address>")
-        sys.exit(2)
-    for opt, arg in opts:
-        if opt == "-h":
-            print("viatom-ble.py -v -a <ble_address>")
-            sys.exit()
-        elif opt == "-v":
-            verbose = True
-        elif opt == "-c":
-            console = True
-        elif opt == "-s":
-            if os.geteuid() != 0:
-                print("Must be root to perform scan")
-                sys.exit(3)
-            ble_scan()
-            sys.exit()
-        elif opt in ("-a", "--address"):
-            ble_address = arg
-
-    # initialize logger
-    if not console or logfile == "":
-        print("Logging to " + logfile)
-        logging.basicConfig(
-            format="%(asctime)s.%(msecs)03d [%(process)d] %(levelname)s %(message)s",
-            datefmt="%Y-%m-%d %H:%M:%S",
-            filename=logfile,
-            level=logging.DEBUG,
-        )
-    else:
-        print("Logging to console")
-        logging.basicConfig(
-            format="%(asctime)s.%(msecs)03d [%(process)d] %(levelname)s %(message)s",
-            datefmt="%Y-%m-%d %H:%M:%S",
-            level=logging.DEBUG,
-        )
-    logger = logging.getLogger()
-
-    logger.info("Starting...")
-
-    # Connect to BLE device and write/read infinitely
-    peripheral = btle.Peripheral()
+def run(self):
     while True:
         try:
-            last_time = datetime.now()
-            start_time = datetime.now()
-            ble_fail_count = 0
-            logger.info("BLE: Connecting to device " + ble_address + "...")
-            # Connect to the peripheral
-            peripheral.connect(ble_address, ble_type)
-            logger.info("BLE: Connected to device " + ble_address)
-            # Set the notification delegate
-            peripheral.setDelegate(ReadDelegate())
-            write_handle = None
-            subscribe_handle = None
-            # magic stuff for the Viatom GATT service
-            ble_uuid = "14839ac4-7d7e-415c-9a42-167340cf2339"
-            ble_write_uuid_prefix = "8b00ace7"
-            write_bytes = b"\xaa\x17\xe8\x00\x00\x00\x00\x1b"
-
-            # this is general magic GATT stuff
-            # notify handles will have a UUID that begins with this
-            ble_notify_uuid_prefix = "00002902"
-            # these are the byte values that we need to write to subscribe/unsubscribe for notifications
-            subscribe_bytes = b"\x01\x00"
-            # unsubscribe_bytes = b'\x00\x00'
-
-            # find the desired service
-            service = peripheral.getServiceByUUID(ble_uuid)
-            if service is not None:
-                logger.debug("Found service: " + str(service))
-
-                descs = service.getDescriptors()
-                # this is the important part-
-                # find the handles that we will write to and subscribe for notifications
-                for desc in descs:
-                    str_uuid = str(desc.uuid).lower()
-                    if str_uuid.startswith(ble_write_uuid_prefix):
-                        write_handle = desc.handle
-                        logger.debug("*** Found write handle: " + str(write_handle))
-                    elif str_uuid.startswith(ble_notify_uuid_prefix):
-                        subscribe_handle = desc.handle
-                        logger.debug(
-                            "*** Found subscribe handle: " + str(subscribe_handle)
-                        )
-
-            if write_handle is not None and subscribe_handle is not None:
-                # we found the handles that we need
-                logger.debug("Found both required handles")
-
-                # now that we're subscribed for notifications, waiting for TX/RX...
-                logger.info("Reading from device...")
-                while True:
-                    # this call performs the subscribe for notifications
-                    response = peripheral.writeCharacteristic(
-                        subscribe_handle, subscribe_bytes, withResponse=True
-                    )
-
-                    # this call performs the request for data
-                    response = peripheral.writeCharacteristic(
-                        write_handle, write_bytes, withResponse=True
-                    )
-
-                    peripheral.waitForNotifications(1.0)
-                    sleep(ble_read_period)
-
-        except btle.BTLEException as e:
-            logger.warning("BTLEException: " + str(e))
-
-        except IOError as e:
-            logger.error("IOError: " + str(e))
-
+            logger.info("Status: Starting health monitoring...")
+            self.connect_influxdb()
+            self.connect_ble()
+            self.read_data()
         except KeyboardInterrupt:
-            logger.info("KeyboardInterrupt, exiting")
-            sys.exit()
+            logger.info("Status: KeyboardInterrupt, exiting")
+            break
+        except Exception as e:
+            logger.error(f"Status: Unexpected error: {e}")
+            logger.info(f"Status: Reconnecting in {self.reconnect_delay} seconds...")
+            time.sleep(self.reconnect_delay)
+            self.reconnect_delay = min(self.reconnect_delay * 2, MAX_RECONNECT_DELAY)
 
-        except:
-            e = sys.exc_info()[0]
-            logger.error("Exception: " + str(e))
+def read_data(self):
+    logger.info("Status: Reading data from BLE device...")
+    while True:
+        try:
+            if self.peripheral.waitForNotifications(1.0):
+                continue
+            time.sleep(BLE_READ_PERIOD)
+        except btle.BTLEDisconnectError:
+            logger.warning("Status: BLE device disconnected")
+            time.sleep(BLE_RECONNECT_DELAY)
+            self.connect_ble()
+        except Exception as e:
+            logger.error(f"Status: Error while reading data: {e}")
+            time.sleep(RETRY_DELAY)
+
+class ReadDelegate(btle.DefaultDelegate):
+    def __init__(self, health_monitor):
+        super().__init__()
+        self.health_monitor = health_monitor
+
+    def handleNotification(self, handle, data):
+        logger.debug(f"Status: Received data: {data.hex()}")
+        data_dict = {}
 
         try:
-            logger.info(
-                "BLE: Waiting "
-                + str(ble_next_reconnect_delay)
-                + " seconds to reconnect..."
-            )
-            time.sleep(ble_next_reconnect_delay)
-            ble_next_reconnect_delay = ble_reconnect_delay
-        except KeyboardInterrupt:
-            logger.info("KeyboardInterrupt, exiting")
-            sys.exit()
-        except:
-            e = sys.exc_info()[0]
-            logger.error("Exception: " + str(e))
+            if len(data) >= 8:
+                data_dict['spo2'] = int(data[7])
+            if len(data) >= 9:
+                data_dict['bpm'] = int(data[8])
+            if len(data) >= 15:
+                data_dict['battery'] = int(data[14])
+            if len(data) >= 17:
+                data_dict['movement'] = int(data[16])
+            if len(data) >= 18:
+                data_dict['pi'] = int(data[17])
 
-        logger.info("Exiting...")
+            if data_dict:
+                logger.info(f"Status: Processed data: {data_dict}")
+                self.health_monitor.send_data(data_dict)
+            else:
+                logger.warning(f"Status: Received data is too short to process: {len(data)} bytes")
+                time.sleep(RETRY_DELAY)
+        except Exception as e:
+            logger.error(f"Status: Error processing data: {e}")
+            logger.debug(f"Status: Data causing error: {data.hex()}")
+            time.sleep(RETRY_DELAY)
+
+if __name__ == "__main__":
+    if not INFLUXDB_TOKEN:
+        logger.error("Status: INFLUXDB_TOKEN environment variable is not set")
+        sys.exit(1)
+
+    logger.info("Status: Initializing Health Monitor")
+    health_monitor = HealthMonitor()
+    health_monitor.run()
+
