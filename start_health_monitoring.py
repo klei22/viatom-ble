@@ -2,17 +2,21 @@ import os
 import sys
 import time
 import logging
-import bluepy.btle as btle
 from datetime import datetime
+import bluepy.btle as btle
 from influxdb_client import InfluxDBClient, Point
 from influxdb_client.client.write_api import SYNCHRONOUS
+from caffeinate import caffeinate
 
 # Configuration
 INFLUXDB_URL = os.environ.get("INFLUXDB_URL", "http://localhost:8086")
 INFLUXDB_TOKEN = os.environ.get("INFLUXDB_TOKEN")
 INFLUXDB_ORG = os.environ.get("INFLUXDB_ORG", "chromebook")
 INFLUXDB_BUCKET = os.environ.get("INFLUXDB_BUCKET", "health_data")
-BLE_ADDRESS = os.environ.get("BLE_ADDRESS", "AA:BB:CC:DD:EE:FF")
+
+# Update this address
+BLE_ADDRESS = os.environ.get("BLE_ADDRESS", "DD:DD:DD:DD:DD:DD")
+
 BLE_TYPE = btle.ADDR_TYPE_RANDOM
 BLE_READ_PERIOD = 2
 RETRY_DELAY = 10
@@ -24,7 +28,7 @@ MAX_RECONNECT_DELAY = 60
 logging.basicConfig(
     format="%(asctime)s.%(msecs)03d [%(process)d] %(levelname)s %(message)s",
     datefmt="%Y-%m-%d %H:%M:%S",
-    level=logging.INFO,
+    level=logging.NOTSET,
 )
 logger = logging.getLogger(__name__)
 
@@ -44,7 +48,8 @@ class HealthMonitor:
             logger.info("Status: Successfully connected to InfluxDB")
         except Exception as e:
             logger.error(f"Status: Failed to connect to InfluxDB: {e}")
-            raise
+            time.sleep(RETRY_DELAY)
+            self.connect_influxdb()
 
     def send_data(self, data_dict, user="user"):
         if not self.write_api:
@@ -117,36 +122,46 @@ class HealthMonitor:
         self.peripheral.writeCharacteristic(self.write_handle, write_bytes, withResponse=True)
         logger.info("Status: BLE service setup completed")
 
-def run(self):
-    while True:
-        try:
-            logger.info("Status: Starting health monitoring...")
-            self.connect_influxdb()
-            self.connect_ble()
-            self.read_data()
-        except KeyboardInterrupt:
-            logger.info("Status: KeyboardInterrupt, exiting")
-            break
-        except Exception as e:
-            logger.error(f"Status: Unexpected error: {e}")
-            logger.info(f"Status: Reconnecting in {self.reconnect_delay} seconds...")
-            time.sleep(self.reconnect_delay)
-            self.reconnect_delay = min(self.reconnect_delay * 2, MAX_RECONNECT_DELAY)
+    def run(self):
+        while True:
+            try:
+                logger.info("Status: Starting health monitoring...")
+                self.connect_influxdb()
+                self.connect_ble()
+                self.read_data()
+            except KeyboardInterrupt:
+                logger.info("Status: KeyboardInterrupt, exiting")
+                self.cleanup()
+                break
+            except Exception as e:
+                logger.error(f"Status: Unexpected error: {e}")
+                logger.info(f"Status: Reconnecting in {self.reconnect_delay} seconds...")
+                time.sleep(self.reconnect_delay)
+                self.reconnect_delay = min(self.reconnect_delay * 2, MAX_RECONNECT_DELAY)
 
-def read_data(self):
-    logger.info("Status: Reading data from BLE device...")
-    while True:
-        try:
-            if self.peripheral.waitForNotifications(1.0):
-                continue
-            time.sleep(BLE_READ_PERIOD)
-        except btle.BTLEDisconnectError:
-            logger.warning("Status: BLE device disconnected")
-            time.sleep(BLE_RECONNECT_DELAY)
-            self.connect_ble()
-        except Exception as e:
-            logger.error(f"Status: Error while reading data: {e}")
-            time.sleep(RETRY_DELAY)
+    def read_data(self):
+        logger.info("Status: Reading data from BLE device...")
+        while True:
+            time.sleep(2)
+            try:
+                self.setup_ble_service()
+                if self.peripheral.waitForNotifications(1.0):
+                    continue
+                time.sleep(BLE_READ_PERIOD)
+            except btle.BTLEDisconnectError:
+                logger.warning("Status: BLE device disconnected")
+                time.sleep(BLE_RECONNECT_DELAY)
+                self.connect_ble()
+            except Exception as e:
+                logger.error(f"Status: Error while reading data: {e}")
+                time.sleep(RETRY_DELAY)
+
+    def cleanup(self):
+        logger.info("Status: Cleaning up resources...")
+        if self.influx_client:
+            self.influx_client.close()
+        if self.peripheral:
+            self.peripheral.disconnect()
 
 class ReadDelegate(btle.DefaultDelegate):
     def __init__(self, health_monitor):
@@ -174,11 +189,10 @@ class ReadDelegate(btle.DefaultDelegate):
                 self.health_monitor.send_data(data_dict)
             else:
                 logger.warning(f"Status: Received data is too short to process: {len(data)} bytes")
-                time.sleep(RETRY_DELAY)
         except Exception as e:
             logger.error(f"Status: Error processing data: {e}")
             logger.debug(f"Status: Data causing error: {data.hex()}")
-            time.sleep(RETRY_DELAY)
+            self.retry_read_notification()
 
 if __name__ == "__main__":
     if not INFLUXDB_TOKEN:

@@ -3,15 +3,18 @@
 
 hcitool dev
 sudo hcitool lescan
-# LE Scan ...
-# DE:C7:8C:52:03:93 O2M 6922
+# LE Scan ... find the address and use in gattool line
+# DD:DD:DD:DD:DD:DD O2M 6922
 sudo apt-get install --no-install-recommends bluetooth
 sudo btmgmt le on
 
 echo "type connect into the following interactive prompt"
-sudo gatttool -t random -b DE:C7:8C:52:03:93 -I
+echo "Then in the tool use the following prompts:"
+echo "[DD:DD:DD:DD:DD:DD][LE]> connect"
+echo "Attempting to connect to DD:DD:DD:DD:DD:DD"
+echo "Connection successful"
+echo "[DD:DD:DD:DD:DD:DD][LE]> quit"
 
-#[DE:C7:8C:52:03:93][LE]> connect
-# Attempting to connect to DE:C7:8C:52:03:93
-# Connection successful
-#[DE:C7:8C:52:03:93][LE]> quit
+# Start gattool interactive prompt
+sudo gatttool -t random -b DD:DD:DD:DD:DD:DD -I
+
