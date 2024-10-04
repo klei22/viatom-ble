@@ -1,1 +1,3 @@
 venv/
+device_ids.py
+__pycache__/

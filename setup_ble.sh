@@ -8,13 +8,15 @@ sudo hcitool lescan
 sudo apt-get install --no-install-recommends bluetooth
 sudo btmgmt le on
 
-echo "type connect into the following interactive prompt"
-echo "Then in the tool use the following prompts:"
-echo "[DD:DD:DD:DD:DD:DD][LE]> connect"
-echo "Attempting to connect to DD:DD:DD:DD:DD:DD"
-echo "Connection successful"
-echo "[DD:DD:DD:DD:DD:DD][LE]> quit"
+device_id="$(python3 -c 'from device_ids import device_ids; print(device_ids[0])')"
+echo "# type connect into the following interactive prompt"
+echo "# Then in the tool use the following prompts:"
+echo "# [$device_id][LE]> connect"
+echo "# Attempting to connect to $device_id"
+echo "# Connection successful"
+echo "# [$device_id[LE]> quit"
 
 # Start gattool interactive prompt
-sudo gatttool -t random -b DD:DD:DD:DD:DD:DD -I
+
+sudo gatttool -t random -b "$device_id" -I
 

@@ -7,6 +7,7 @@ import bluepy.btle as btle
 from influxdb_client import InfluxDBClient, Point
 from influxdb_client.client.write_api import SYNCHRONOUS
 from caffeinate import caffeinate
+from device_ids import device_ids
 
 # Configuration
 INFLUXDB_URL = os.environ.get("INFLUXDB_URL", "http://localhost:8086")
@@ -15,7 +16,8 @@ INFLUXDB_ORG = os.environ.get("INFLUXDB_ORG", "chromebook")
 INFLUXDB_BUCKET = os.environ.get("INFLUXDB_BUCKET", "health_data")
 
 # Update this address
-BLE_ADDRESS = os.environ.get("BLE_ADDRESS", "DD:DD:DD:DD:DD:DD")
+device_id=device_ids[0]
+BLE_ADDRESS = os.environ.get("BLE_ADDRESS", device_id)
 
 BLE_TYPE = btle.ADDR_TYPE_RANDOM
 BLE_READ_PERIOD = 2
