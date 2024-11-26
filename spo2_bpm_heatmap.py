@@ -86,12 +86,19 @@ def plot_heatmap(heatmap_data, output_path=None):
     # Rotate x-axis labels for better readability
     plt.xticks(rotation=45, ha='right')
 
-    # Show or save the plot
+    # Save the plot
     if output_path:
         plt.savefig(output_path)
         print(f'Heatmap saved to {output_path}')
     else:
-        plt.show()
+        # Provide a default filename if output_path is not specified
+        default_output = 'heatmap.png'
+        plt.savefig(default_output)
+        print(f'Heatmap saved to {default_output}')
+
+    # Comment out plt.show() since it cannot be used in this environment
+    # plt.show()
+
 
 def main():
     args = parse_arguments()
